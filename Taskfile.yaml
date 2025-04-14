@@ -1,0 +1,150 @@
+version: "3"
+
+vars:
+  CLUSTER_NAME:
+    sh: echo "istio-ambient-demo"
+  ISTIO_VERSION:
+    sh: echo "1.20"
+  GATEWAY_API_VERSION:
+    sh: echo "v1.2.1"
+
+tasks:
+  create-local-cluster:
+    desc: "🚀 Creates a local Kubernetes cluster using KinD for development and testing."
+    cmds:
+      - |
+        if kind get clusters | grep -q "{{.CLUSTER_NAME}}"; then
+          echo "⚠️ Cluster {{.CLUSTER_NAME}} already exists. Skipping creation."
+          exit 0
+        fi
+      - echo "✅ Initializing local Kubernetes cluster setup..."
+      - kind create cluster --config kind-config.yaml --name {{.CLUSTER_NAME}} || exit 1
+      - echo "🌍 Verifying cluster creation..."
+      - kind get clusters
+      - echo "✅ Cluster created successfully!"
+    silent: true
+
+  setup-kube-context:
+    desc: "🔧 Configures the Kubernetes context to interact with the local cluster."
+    cmds:
+      - |
+        if ! kubectl cluster-info --context kind-{{.CLUSTER_NAME}} &>/dev/null; then
+          echo "❌ Failed to connect to cluster {{.CLUSTER_NAME}}"
+          exit 1
+        fi
+      - echo "🔄 Setting up Kubernetes context for '{{.CLUSTER_NAME}}' cluster..."
+      - kubectl cluster-info --context kind-{{.CLUSTER_NAME}}
+      - echo "✅ Kubernetes context configured successfully!"
+    silent: true
+
+  delete-local-cluster:
+    desc: "🗑️ Deletes the local Kubernetes cluster and frees up resources."
+    deps:
+      - setup-kube-context
+    cmds:
+      - |
+        if ! kind get clusters | grep -q "{{.CLUSTER_NAME}}"; then
+          echo "⚠️ Cluster {{.CLUSTER_NAME}} does not exist. Nothing to delete."
+          exit 0
+        fi
+      - echo "⚠️ Deleting the local Kubernetes cluster {{.CLUSTER_NAME}}..."
+      - kind delete cluster --name {{.CLUSTER_NAME}}
+      - echo "✅ Cluster deleted successfully!"
+    silent: true
+
+  install-metric-server:
+    desc: "📊 Installs the Kubernetes Metrics Server for resource monitoring."
+    deps:
+      - setup-kube-context
+    cmds:
+      - echo "📡 Deploying Metrics Server to enable resource utilization tracking..."
+      - helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/ || exit 1
+      - helm repo update metrics-server
+      - helm upgrade --install metrics-server metrics-server/metrics-server --namespace kube-system --create-namespace --set 'args[0]=--kubelet-insecure-tls' --wait || exit 1
+      - echo "✅ Metrics Server installed successfully!"
+    silent: true
+
+  tag-nodes:
+    desc: "🏷️ Labels nodes in the cluster to enable Ingress Controller and node affinity."
+    deps:
+      - setup-kube-context
+    cmds:
+      - echo "🔖 Tagging all nodes with 'ingress-ready' label..."
+      - kubectl label nodes --all ingress-ready=true --overwrite
+      - echo "📌 Assigning topology zones to control-plane and worker nodes..."
+      - kubectl label node {{.CLUSTER_NAME}}-control-plane topology.kubernetes.io/zone=zone-a --overwrite
+      - kubectl label node {{.CLUSTER_NAME}}-worker topology.kubernetes.io/zone=zone-b --overwrite
+      - kubectl label node {{.CLUSTER_NAME}}-worker2 topology.kubernetes.io/zone=zone-c --overwrite
+      - echo "✅ Node labeling completed successfully!"
+    silent: true
+  
+  install-cert-manager:
+    desc: "🔐 Installs Cert-Manager for automated TLS certificate management."
+    deps:
+      - setup-kube-context
+    cmds:
+      - echo "📥 Adding the Cert-Manager Helm repository..."
+      - helm repo add jetstack https://charts.jetstack.io || exit 1
+      - helm repo update jetstack
+      - echo "🛠️ Installing Cert-Manager via Helm..."
+      - helm upgrade --install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --set installCRDs=true --wait || exit 1
+      - echo "✅ Cert-Manager installation complete!"
+    silent: true
+
+  install-istio-ambient:
+    desc: "🚀 Installs Istio Ambient for ambient mesh deployment."
+    deps:
+      - setup-kube-context
+    cmds:
+      - echo "🔄 Installing Istio Ambient..."
+      - kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/{{.GATEWAY_API_VERSION}}/standard-install.yaml || exit 1
+      - istioctl install --set profile=ambient -y || exit 1
+      - kubectl label namespace default istio.io/dataplane-mode=ambient --overwrite
+      - echo "✅ Istio Ambient installation complete!"
+    silent: true
+  
+  deploy-sample-services:
+    desc: "🚀 Deploys sample services for demonstration purposes."
+    deps:
+      - setup-kube-context
+    cmds:
+      - echo "🔄 Deploying sample services..."
+      - kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-{{.ISTIO_VERSION}}/samples/httpbin/httpbin.yaml || exit 1
+      - kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-{{.ISTIO_VERSION}}/samples/sleep/sleep.yaml || exit 1
+      - echo "✅ Sample services deployed successfully!"
+    silent: true
+
+  verify-deployment:
+    desc: "🔍 Verifies the health and status of all deployed components."
+    deps:
+      - setup-kube-context
+    cmds:
+      - echo "🔍 Verifying cluster components..."
+      - kubectl get nodes
+      - kubectl get pods -n kube-system
+      - kubectl get pods -n cert-manager
+      - kubectl get pods -n istio-system
+      - echo "✅ Verification completed successfully!"
+    silent: true
+      
+  full-deploy-local:
+    desc: "🚀 Deploys a fully functional local cluster with all necessary components. Ideal for development, testing, and demos."
+    cmds:
+      - echo "🔄 Initiating full deployment of the local Kubernetes cluster and essential services..."
+      - task: create-local-cluster
+      - task: setup-kube-context
+      - task: install-metric-server
+      - task: tag-nodes
+      - task: install-cert-manager
+      - task: install-istio-ambient
+      - task: deploy-sample-services
+      - task: verify-deployment
+      - echo "🎉 Full deployment completed successfully!"
+    silent: true
+
+  cleanup:
+    desc: "🧹 Cleans up all resources and removes the local cluster."
+    cmds:
+      - task: delete-local-cluster
+      - echo "🧹 Cleanup completed successfully!"
+    silent: true
