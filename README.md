@@ -101,3 +101,19 @@ The Taskfile uses the following variables that can be modified if needed:
 - The local cluster is for development purposes only
 - TLS certificates are managed by Cert-Manager
 - Metrics Server is configured with `--kubelet-insecure-tls` for local development
+
+## 🔍 Testing Istio Ambient Mesh
+
+After deployment, you can test the Istio Ambient Mesh connectivity between services. The following command demonstrates communication between the `sleep` and `httpbin` services:
+
+```bash
+kubectl exec -it deploy/sleep -c sleep -- curl httpbin.default.svc.cluster.local:8000/headers
+```
+
+This command will:
+
+1. Execute a curl command from the `sleep` pod
+2. Target the `httpbin` service in the default namespace
+3. Request the `/headers` endpoint which returns the request headers
+
+Expected output will show the HTTP headers of the request, including Istio-specific headers that demonstrate the Ambient Mesh is working correctly.
